@@ -1,0 +1,11 @@
+openai==1.51.0
+httpx==0.27.2
+# trigger + timeline service (scripts/trigger.py, `make trigger`)
+fastapi==0.115.0
+uvicorn==0.30.6
+# OpenTelemetry auto-instrumentation for the agent
+# Pinned as a matched set: distro 0.49b0 requires instrumentation==0.49b0,
+# which is what openai-v2 2.0b0/2.1b0 need too (2.2b0+ jumps to 0.58b0).
+opentelemetry-distro==0.49b0
+opentelemetry-exporter-otlp==1.28.0
+opentelemetry-instrumentation-openai-v2==2.0b0

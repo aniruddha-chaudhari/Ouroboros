@@ -1,0 +1,122 @@
+{
+  "title": "Ouroboros — AI Agent Observability",
+  "description": "Self-observing SRE agent: token usage, cost, latency, tool-call distribution, and fleet error rate. Import via Dashboards -> New -> Import JSON.",
+  "tags": ["ouroboros", "genai", "agent", "sre"],
+  "layout": [
+    {"i": "tokens", "x": 0, "y": 0, "w": 6, "h": 4},
+    {"i": "cost", "x": 6, "y": 0, "w": 6, "h": 4},
+    {"i": "latency", "x": 0, "y": 4, "w": 6, "h": 4},
+    {"i": "toolmix", "x": 6, "y": 4, "w": 6, "h": 4},
+    {"i": "errorrate", "x": 0, "y": 8, "w": 12, "h": 4}
+  ],
+  "widgets": [
+    {
+      "id": "tokens",
+      "title": "LLM token usage (input vs output)",
+      "panelTypes": "graph",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "aggregateAttribute": {"key": "gen_ai.client.token.usage"},
+              "timeAggregation": "rate",
+              "spaceAggregation": "sum",
+              "groupBy": [{"key": "gen_ai.token.type"}],
+              "expression": "A"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "cost",
+      "title": "Estimated LLM cost (USD)",
+      "panelTypes": "value",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "aggregateAttribute": {"key": "gen_ai.client.cost"},
+              "timeAggregation": "sum",
+              "spaceAggregation": "sum",
+              "expression": "A"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "latency",
+      "title": "Agent operation latency (p95 / p99)",
+      "panelTypes": "graph",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "metrics",
+              "aggregateAttribute": {"key": "gen_ai.client.operation.duration"},
+              "timeAggregation": "p95",
+              "spaceAggregation": "p95",
+              "expression": "A"
+            },
+            {
+              "dataSource": "metrics",
+              "aggregateAttribute": {"key": "gen_ai.client.operation.duration"},
+              "timeAggregation": "p99",
+              "spaceAggregation": "p99",
+              "expression": "B"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "toolmix",
+      "title": "MCP / action tool-call distribution",
+      "panelTypes": "graph",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "traces",
+              "aggregateOperator": "count",
+              "filters": {"items": [{"key": {"key": "gen_ai.operation.name"}, "op": "=", "value": "execute_tool"}]},
+              "groupBy": [{"key": "gen_ai.tool.name"}],
+              "expression": "A"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "errorrate",
+      "title": "Demo fleet error rate % (A/B*100)",
+      "panelTypes": "graph",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "traces", "aggregateOperator": "count", "expression": "A",
+              "filters": {"items": [
+                {"key": {"key": "service.name"}, "op": "=", "value": "demo-api"},
+                {"key": {"key": "hasError"}, "op": "=", "value": "true"}
+              ]}
+            },
+            {
+              "dataSource": "traces", "aggregateOperator": "count", "expression": "B",
+              "filters": {"items": [{"key": {"key": "service.name"}, "op": "=", "value": "demo-api"}]}
+            }
+          ],
+          "queryFormulas": [{"expression": "A/B*100", "legend": "error %"}]
+        }
+      }
+    }
+  ]
+}

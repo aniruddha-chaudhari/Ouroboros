@@ -1,0 +1,19 @@
+apiVersion: v1alpha1
+kind: Installation
+metadata:
+  name: ouroboros-signoz
+spec:
+  deployment:
+    flavor: compose
+    mode: docker
+  mcp:
+    spec:
+      enabled: true
+  # Pin a recent SigNoz version so alert-rule MCP tools work:
+  #   signoz_create_alert / update / delete / list  -> requires SigNoz >= v0.120.0
+  #   signoz_get_alert_history                       -> requires SigNoz >= v0.118.0
+  #   signoz_check_metric_usage                      -> requires SigNoz >= v0.131.0
+  # If Foundry's "version" field name differs in your installed foundryctl version,
+  # run `foundryctl gauge -f casting.yaml` first — it will tell you the exact
+  # schema keys accepted by your CLI build, and you can adjust this file to match
+  # before running `forge`/`cast`. Do NOT hand-edit anything under pours/.

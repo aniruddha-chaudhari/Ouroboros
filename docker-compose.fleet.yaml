@@ -1,0 +1,39 @@
+# Ouroboros demo fleet ("the patient").
+#
+# Runs alongside the SigNoz stack deployed by Foundry. It joins the SigNoz
+# compose network so services reach the OTel collector at
+# signoz-otel-collector:4317. Adjust the external network name to match your
+# Foundry output (check: `docker network ls | grep signoz`).
+#
+#   docker compose -f docker-compose.fleet.yaml up -d --build
+
+services:
+  mongo:
+    image: mongo:7
+    networks: [signoz-net]
+
+  demo-api:
+    build: ./services/api
+    environment:
+      OTEL_SERVICE_NAME: demo-api
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://ingester:4317
+      MONGO_URL: mongodb://mongo:27017
+    ports:
+      - "8001:8000"     # host:8001 -> action tools hit http://localhost:8001/fault
+    depends_on: [mongo]
+    networks: [signoz-net]
+
+  demo-worker:
+    build: ./services/worker
+    environment:
+      OTEL_SERVICE_NAME: demo-worker
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://ingester:4317
+      API_URL: http://demo-api:8000
+    depends_on: [demo-api]
+    networks: [signoz-net]
+
+networks:
+  signoz-net:
+    external: true
+    # Rename to match the network Foundry created for the SigNoz stack.
+    name: ouroboros-signoz-network

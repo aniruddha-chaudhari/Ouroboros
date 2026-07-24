@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# Node / UI
+node_modules/
+ui/dist/
+
+# --- REPRODUCIBILITY: do NOT ignore these (hackathon requirement) ---
+# casting.yaml and casting.yaml.lock MUST be committed.
+# Foundry writes generated manifests to pours/ — keep them out of git,
+# they are regenerated deterministically by `foundryctl forge`.
+pours/
+!casting.yaml
+!casting.yaml.lock
