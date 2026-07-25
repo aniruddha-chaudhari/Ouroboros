@@ -23,7 +23,8 @@ import os
 
 from openai import OpenAI
 
-from .telemetry import invoke_agent_span, record_cost
+from . import semconv as S
+from .telemetry import invoke_agent_span, mcp_output_validity, record_cost
 from .tools import actions, signoz_mcp
 
 AGENT_NAME = "ouroboros-sre"
@@ -63,6 +64,10 @@ Evidence notes:
   few percent is an error fault. error_log_count = recent ERROR-level logs.
 - memory_leak_chunks = leaked 5MB memory blocks. 0 is healthy; a positive and
   growing value is a memory leak that can only be cleared by restarting.
+- telemetry = how trustworthy this evidence is. `missing` lists signals that came
+  back unusable. If a signal is missing you have NO information about that fault
+  type — do not read it as "healthy". Lower your confidence accordingly, and if
+  the missing signal is the one that would confirm your diagnosis, say so.
 Rules:
 - If the evidence shows the service is healthy, use action "none".
 - Pick a remediation only when the evidence clearly points to that specific fault:
@@ -114,17 +119,40 @@ def _grouped(resp):
 def gather_evidence(service: str = "demo-api") -> dict:
     """DIAGNOSE: pull the signals a human SRE would look at, via SigNoz MCP, and
     flatten them into clean, unambiguous numbers the model can actually read
-    (latency in ms per operation, error rate %, error-log count)."""
-    lat_ns = _grouped(_safe(signoz_mcp.latency_p95, service, minutes=LOOKBACK_MIN))
+    (latency in ms per operation, error rate %, error-log count).
+
+    Also judges whether the evidence is TRUSTWORTHY, not just what it says.
+    Every failure path here used to collapse into a falsy default (no rows ->
+    {} -> "0ms latency, 0% errors"), which reads exactly like a perfectly
+    healthy service. So a telemetry outage looked like good news, and the LLM
+    would confidently diagnose "healthy" over an empty evidence blob. The
+    `telemetry` block it returns makes that distinguishable.
+
+    Note which empties are meaningful: a service actually serving traffic MUST
+    produce spans and latency, so empty there means we're blind. But zero error
+    logs and zero leaked memory are the *normal* state of a healthy service, so
+    empty there is a real answer, not a missing one."""
+    lat_raw = _safe(signoz_mcp.latency_p95, service, minutes=LOOKBACK_MIN)
+    lat_status, _ = mcp_output_validity(lat_raw)
+    lat_ns = _grouped(lat_raw)
     latency_ms = {
         op: round(ns / 1e6, 1) for op, ns in lat_ns.items() if isinstance(ns, (int, float))
     }
 
     err = _safe(signoz_mcp.error_rate, service, minutes=LOOKBACK_MIN)
+    # Judge this on the TOTAL span counts (the denominator) only. The error-span
+    # half legitimately returns zero rows on a healthy service — that's the
+    # numerator being 0, not missing data. Grading the pair "worst wins" would
+    # mark every healthy service as degraded and block all auto-healing.
+    err_status, _ = mcp_output_validity(
+        err.get("total_by_op") if isinstance(err, dict) and "total_by_op" in err else err
+    )
     error_rate_pct = None
+    spans_seen = 0
     if isinstance(err, dict) and "total_by_op" in err:
         totals = _grouped(err.get("total_by_op"))
         errs = _grouped(err.get("errors_by_op"))
+        spans_seen = int(sum(v for v in totals.values() if isinstance(v, (int, float))))
         # worst per-operation error rate; ignore tiny-volume ops (< 5 spans) so a
         # single stray error can't spike the rate to 100%.
         rates = [
@@ -135,18 +163,49 @@ def gather_evidence(service: str = "demo-api") -> dict:
         if rates:
             error_rate_pct = round(max(rates), 1)
 
-    _cols, log_rows = _mcp_rows(
-        _safe(signoz_mcp.search_logs, "severity_text = 'ERROR'", minutes=LOOKBACK_MIN)
-    )
+    logs_raw = _safe(signoz_mcp.search_logs, "severity_text = 'ERROR'", minutes=LOOKBACK_MIN)
+    logs_status, _ = mcp_output_validity(logs_raw)
+    _cols, log_rows = _mcp_rows(logs_raw)
 
-    mem = _scalar(_safe(signoz_mcp.memory_pressure, service, minutes=LOOKBACK_MIN))
+    mem_raw = _safe(signoz_mcp.memory_pressure, service, minutes=LOOKBACK_MIN)
+    mem_status, _ = mcp_output_validity(mem_raw)
+    mem = _scalar(mem_raw)
     memory_leak_chunks = int(mem) if isinstance(mem, (int, float)) else 0
+
+    # "ok" = returned rows. For logs/memory an empty answer is still a real
+    # answer (nothing wrong to report), so it counts as usable.
+    signals = {
+        "latency": lat_status,
+        "errors": err_status,
+        "logs": logs_status,
+        "memory": mem_status,
+    }
+    usable = {
+        "latency": lat_status == "ok",
+        "errors": err_status == "ok",
+        "logs": logs_status in ("ok", "empty"),
+        "memory": mem_status in ("ok", "empty"),
+    }
+    missing = sorted(k for k, good in usable.items() if not good)
+    # The anchor question: can we see this service at all? If it's serving
+    # traffic there are spans; zero spans AND no latency means we are blind,
+    # not that everything is fine.
+    visible = spans_seen > 0 or bool(latency_ms)
 
     return {
         "latency_p95_ms": dict(sorted(latency_ms.items(), key=lambda kv: kv[1], reverse=True)),
         "error_rate_pct": error_rate_pct,
         "error_log_count": len(log_rows) if log_rows is not None else None,
         "memory_leak_chunks": memory_leak_chunks,
+        "telemetry": {
+            "visible": visible,
+            "spans_seen": spans_seen,
+            "signals": signals,
+            "usable_signals": sum(usable.values()),
+            "total_signals": len(usable),
+            "missing": missing,
+            "degraded": bool(missing),
+        },
     }
 
 
@@ -188,6 +247,14 @@ def _finalize(span, decision: dict, outcome: str, recovery: dict) -> None:
     span.set_attribute("ouroboros.confidence", float(dec.get("confidence", 0.0) or 0.0))
     span.set_attribute("ouroboros.outcome", outcome)
     span.set_attribute("ouroboros.healed", bool(recovery.get("healthy")))
+    tel = (dec.get("_evidence") or {}).get("telemetry") or {}
+    if tel:
+        span.set_attribute(S.EVIDENCE_VISIBLE, bool(tel.get("visible")))
+        span.set_attribute(S.EVIDENCE_SPANS_SEEN, int(tel.get("spans_seen", 0)))
+        span.set_attribute(S.EVIDENCE_USABLE, int(tel.get("usable_signals", 0)))
+        span.set_attribute(S.EVIDENCE_TOTAL, int(tel.get("total_signals", 0)))
+        span.set_attribute(S.EVIDENCE_DEGRADED, bool(tel.get("degraded")))
+        span.set_attribute(S.EVIDENCE_MISSING, ",".join(tel.get("missing") or []))
 
 
 def apply_action(action_name: str, service: str = "demo-api") -> dict:
@@ -215,16 +282,41 @@ def apply_action(action_name: str, service: str = "demo-api") -> dict:
 def run_once(service: str = "demo-api") -> dict:
     """One diagnose→decide→gate cycle, as a single invoke_agent trace.
 
-    Three-tier autonomy — outcomes:
+    Outcomes:
+      blind     — telemetry unusable; refused to diagnose (no LLM call made)
       no_action — agent judged nothing is wrong (did not act)
       healed    — confident + low-risk: auto-executed and verified recovery
       failed    — auto-executed but did not recover
       proposed  — action recommended but NOT executed; awaiting human approval
-                  (either below the auto-heal confidence bar, or a high-impact
-                  action like a restart that always needs sign-off)
+                  (below the auto-heal confidence bar, a high-impact action like
+                  a restart, or a diagnosis made on incomplete evidence)
     """
     with invoke_agent_span(AGENT_NAME, f"heal {service}") as span:
         evidence = gather_evidence(service)                      # DIAGNOSE
+        tel = evidence.get("telemetry") or {}
+
+        # Tier 0: BLIND — we cannot see the service, so we refuse to diagnose.
+        # Deliberately does NOT call the LLM: given an all-zeros evidence blob it
+        # would confidently answer "healthy", which is the exact failure mode
+        # this guard exists to prevent. No answer beats a confident wrong one.
+        if not tel.get("visible", True):
+            recovery = actions.verify_recovery()
+            decision = {
+                "diagnosis": (
+                    "Cannot see the service — telemetry returned no usable data "
+                    f"(spans seen: {tel.get('spans_seen', 0)}). Refusing to guess."
+                ),
+                "action": "none", "confidence": 0.0,
+                "_cost_usd": 0.0, "_tokens": {"in": 0, "out": 0},
+                "_evidence": evidence,
+                "_blind": {"missing": tel.get("missing") or [],
+                           "signals": tel.get("signals") or {}},
+            }
+            _finalize(span, decision, "blind", recovery)
+            span.set_attribute("ouroboros.blind", True)
+            return {"outcome": "blind", "decision": decision,
+                    "action_result": None, "recovery": recovery, "attempts": []}
+
         decision = decide(evidence)                              # DECIDE
         decision["_evidence"] = evidence                         # surface what it saw
 
@@ -239,16 +331,28 @@ def run_once(service: str = "demo-api") -> dict:
                     "action_result": None, "recovery": recovery, "attempts": []}
 
         risky = action_name in REQUIRES_APPROVAL
-        auto = confidence >= AUTO_THRESHOLD and not risky
+        # Partial blindness downgrades autonomy: if some signals came back
+        # unusable the agent may still be right, but it reasoned on incomplete
+        # evidence, so it loses the right to act unsupervised.
+        degraded = bool(tel.get("degraded"))
+        auto = confidence >= AUTO_THRESHOLD and not risky and not degraded
 
         # Tier 2: propose only — do NOT execute, wait for a human
         if not auto:
             recovery = actions.verify_recovery()
-            reason = (
-                "high-impact action — needs human sign-off" if risky
-                else f"confidence {int(confidence * 100)}% is below the "
-                     f"{int(AUTO_THRESHOLD * 100)}% auto-heal bar"
-            )
+            if risky:
+                reason = "high-impact action — needs human sign-off"
+            elif degraded:
+                missing = ", ".join(tel.get("missing") or []) or "some signals"
+                reason = (
+                    f"incomplete evidence ({missing} unavailable) — not safe to "
+                    "auto-apply on partial data"
+                )
+            else:
+                reason = (
+                    f"confidence {int(confidence * 100)}% is below the "
+                    f"{int(AUTO_THRESHOLD * 100)}% auto-heal bar"
+                )
             decision["_proposal"] = {"action": action_name, "reason": reason,
                                      "requires_approval": risky}
             _finalize(span, decision, "proposed", recovery)

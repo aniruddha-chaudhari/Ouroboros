@@ -8,11 +8,16 @@ const OUTCOME = {
   no_action: { dot: 'var(--cyan)', tag: 'checked', chip: 'good', result: '✓ all good' },
   held: { dot: 'var(--amber)', tag: 'needs review', chip: 'warn', result: '⚠ needs a human' },
   failed: { dot: 'var(--red)', tag: 'fix failed', chip: 'bad', result: '✗ not fixed' },
+  // Deliberately red, not neutral: losing visibility is a real incident, and
+  // the whole point is that it must never look like "all clear".
+  blind: { dot: 'var(--red)', tag: "couldn't see", chip: 'bad', result: '⚠ refused to guess' },
+  proposed: { dot: 'var(--amber)', tag: 'awaiting approval', chip: 'warn', result: '⏸ waiting for you' },
 }
 
 const TYPE = {
   alert: { dot: 'var(--amber)', label: 'problem detected' },
   auto_detected: { dot: 'var(--amber)', label: 'auto-detected' },
+  telemetry_blind: { dot: 'var(--red)', label: 'lost visibility' },
   manual_trigger: { dot: 'var(--cyan)', label: 'check started' },
   remediation: { dot: 'var(--acid)', label: 'result' },
   proposed: { dot: 'var(--amber)', label: 'approval requested' },
@@ -39,6 +44,19 @@ function Remediation({ detail }) {
   return (
     <>
       {dec.diagnosis && <div className="diag">&ldquo;{dec.diagnosis}&rdquo;</div>}
+      {tel.total_signals ? (
+        <div className={'evidence-bar' + (tel.visible === false || tel.degraded ? ' bad' : '')}>
+          evidence{' '}
+          <b>
+            {tel.visible === false
+              ? 'unusable — could not see the service'
+              : `${tel.usable_signals}/${tel.total_signals} signals usable`}
+          </b>
+          {tel.missing && tel.missing.length > 0 && (
+            <span className="evidence-missing">missing: {tel.missing.join(', ')}</span>
+          )}
+        </div>
+      ) : null}
       <div className="rowchips">
         <span className="chip">fix <b>{acted ? dec.action : 'none needed'}</b></span>
         {typeof dec._cost_usd === 'number' && <span className="chip">AI cost <b>${dec._cost_usd.toFixed(4)}</b></span>}
@@ -90,6 +108,11 @@ export default function EventCard({ ev, index }) {
         )}
         {ev.type === 'auto_detected' && (
           <div className="headline">Watchdog spotted a problem — investigating automatically</div>
+        )}
+        {ev.type === 'telemetry_blind' && (
+          <div className="headline">
+            Lost visibility — telemetry returned no usable data. Not treating this as healthy.
+          </div>
         )}
         {ev.type === 'proposed' && (
           <div className="headline">

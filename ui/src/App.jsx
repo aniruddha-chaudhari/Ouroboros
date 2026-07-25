@@ -6,7 +6,14 @@ import ApprovalCard from './components/ApprovalCard.jsx'
 import Hero from './components/Hero.jsx'
 import { fetchTimeline, setAuto, approve, reject, summarize } from './api.js'
 
+const isConsoleRoute = () => window.location.hash === '#console'
+
 export default function App() {
+  // The hero's animated ASCII canvas keeps its rAF loop running for as long as
+  // it's mounted. Routing the console to its own hash (instead of scrolling
+  // both onto one page) unmounts the hero entirely once you're in the console,
+  // which was competing with the timeline polling for main-thread time.
+  const [page, setPage] = useState(isConsoleRoute() ? 'console' : 'hero')
   const [events, setEvents] = useState([])
   const [watch, setWatch] = useState(null)
   const [pending, setPending] = useState([])
@@ -14,6 +21,12 @@ export default function App() {
   const [connected, setConnected] = useState(null) // null = connecting
   const [activePhase, setActivePhase] = useState(0)
   const [clock, setClock] = useState('')
+
+  useEffect(() => {
+    const onHashChange = () => setPage(isConsoleRoute() ? 'console' : 'hero')
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
 
   const summary = useMemo(() => summarize(events), [events])
   // The watchdog is the trigger now — the ring "works" whenever it's mid-heal.
@@ -66,19 +79,20 @@ export default function App() {
     }
   }, [watch, poll])
 
-  // Poll the timeline every 2.5s.
+  // Poll the timeline every 2.5s — only while the console is actually on screen.
   useEffect(() => {
+    if (page !== 'console') return
     poll()
     const id = setInterval(poll, 2500)
     return () => clearInterval(id)
-  }, [poll])
+  }, [poll, page])
 
   // Cycle the loop phases while the agent is working.
   useEffect(() => {
-    if (!working) return
+    if (!working || page !== 'console') return
     const id = setInterval(() => setActivePhase((p) => (p + 1) % 4), 120)
     return () => clearInterval(id)
-  }, [working])
+  }, [working, page])
 
   // Footer clock.
   useEffect(() => {
@@ -109,16 +123,29 @@ export default function App() {
     ? 'Watching continuously · all clear'
     : 'Watching continuously…'
 
-  const scrollToConsole = () => {
-    document.getElementById('console-top')?.scrollIntoView({ behavior: 'smooth' })
+  const enterConsole = () => {
+    window.location.hash = 'console'
+    setPage('console')
+  }
+  const backToHero = () => {
+    window.location.hash = ''
+    setPage('hero')
+  }
+
+  if (page === 'hero') {
+    return <Hero onEnter={enterConsole} />
   }
 
   return (
-    <>
-      <Hero onEnter={scrollToConsole} />
       <div className="wrap" id="console-top">
       <header>
-        <div className="brand">
+        <div
+          className="brand"
+          onClick={backToHero}
+          onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && backToHero()}
+          role="button"
+          tabIndex={0}
+        >
           <svg className="mark" viewBox="0 0 40 40" aria-hidden="true">
             <defs>
               <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
@@ -191,6 +218,5 @@ export default function App() {
         <span>{clock}</span>
       </footer>
       </div>
-    </>
   )
 }

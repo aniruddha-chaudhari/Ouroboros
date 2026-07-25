@@ -6,14 +6,40 @@ spec:
   deployment:
     flavor: compose
     mode: docker
+
+  # --- Version pins (reproducibility) ------------------------------------
+  # Every image is pinned to the exact version this project was built and
+  # demoed against, so `foundryctl cast -f casting.yaml` reproduces the same
+  # stack later. The digests below are the ones we actually ran:
+  #   signoz               v0.134.0  sha256:89d6ab254a02c8feb10d1a9ff0e0979f16eb1b9fedecb5dd169f89b5194a6ef3
+  #   signoz-mcp-server    v0.9.0    sha256:75327a2cea4ba7762e989d911edda62a126cb8d0f895b8940c7466b2e0ec514c
+  #   signoz-otel-collector v0.144.6 sha256:7e4e539a73f1f88fbc1cd7e659ab3950908e83ce1f2a37a297452f910d072174
+  # Leaving these at `latest` is not reproducible: signoz-mcp-server:latest
+  # moved on 2026-07-24, two days after this project was built against v0.9.0.
+  #
+  # v0.134.0 also clears every SigNoz floor the agent's MCP toolset needs:
+  #   signoz_get_alert_history   >= v0.118.0
+  #   signoz_create/update/delete/list_alert >= v0.120.0
+  #   signoz_check_metric_usage  >= v0.131.0
+  # NOTE: `image` is the field Foundry actually renders into the compose file;
+  # `version` alone is metadata and leaves the tag at :latest. Set both.
+  signoz:
+    spec:
+      image: signoz/signoz:v0.134.0
+      version: v0.134.0
+
+  ingester:
+    spec:
+      image: signoz/signoz-otel-collector:v0.144.6
+      version: v0.144.6
+
   mcp:
     spec:
       enabled: true
-  # Pin a recent SigNoz version so alert-rule MCP tools work:
-  #   signoz_create_alert / update / delete / list  -> requires SigNoz >= v0.120.0
-  #   signoz_get_alert_history                       -> requires SigNoz >= v0.118.0
-  #   signoz_check_metric_usage                      -> requires SigNoz >= v0.131.0
-  # If Foundry's "version" field name differs in your installed foundryctl version,
-  # run `foundryctl gauge -f casting.yaml` first — it will tell you the exact
-  # schema keys accepted by your CLI build, and you can adjust this file to match
-  # before running `forge`/`cast`. Do NOT hand-edit anything under pours/.
+      image: signoz/signoz-mcp-server:v0.9.0
+      version: v0.9.0
+
+  # ClickHouse (telemetrystore/telemetrykeeper) and Postgres (metastore) are
+  # already pinned to concrete versions by Foundry's own defaults — see
+  # casting.yaml.lock. Do NOT hand-edit anything under pours/; it is generated
+  # by `foundryctl forge` and regenerated deterministically from this file.

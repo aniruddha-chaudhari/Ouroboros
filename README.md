@@ -86,13 +86,14 @@ make ui-dev     # http://localhost:5173
 ## Reproducibility
 
 - `casting.yaml` **and** `casting.yaml.lock` are committed; `.gitignore` explicitly keeps the lock and ignores only the regenerable `pours/`.
+- All three SigNoz images are pinned to exact versions in `casting.yaml` (`signoz` v0.134.0, `signoz-mcp-server` v0.9.0, `signoz-otel-collector` v0.144.6) — the same versions this project was built and demoed against, not floating `latest` tags.
 - Dashboards are committed as JSON; alerts as Terraform (or via `scripts/create_alerts_via_mcp.py`).
 - Judges can re-run `foundryctl cast -f casting.yaml` to reproduce the full stack.
 
 ## Notes & caveats
 
 - **Host metrics:** Foundry deploys SigNoz + MCP but not the Docker host-metrics collector (SigNoz issue #11829). Run a collection agent separately if you showcase the Infra view.
-- **MCP tool versions:** alert-rule MCP tools need SigNoz ≥ v0.120.0; pin a recent image in `casting.yaml`.
+- **MCP tool versions:** alert-rule MCP tools need SigNoz ≥ v0.120.0, which v0.134.0 (pinned above) satisfies.
 - **GenAI semconv is pre-1.0:** attribute strings are isolated in `agent/semconv.py` for easy version bumps.
 - **Content capture** (`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true`) is on for the demo only — redact at the Collector in production.
 

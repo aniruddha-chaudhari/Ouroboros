@@ -53,6 +53,12 @@ export function outcomeMeta(outcome, healthy) {
       return { label: 'FIXED', status: 'HEALTHY', note: 'a problem was found and fixed', degraded: false }
     case 'no_action':
       return { label: 'ALL GOOD', status: 'HEALTHY', note: 'checked — nothing needed fixing', degraded: false }
+    case 'blind':
+      // Not healthy and not broken — we genuinely don't know, and saying so is
+      // the point. Never render this as reassuring.
+      return { label: "CAN'T SEE", status: "CAN'T SEE", note: 'telemetry is unusable — refused to guess', degraded: true }
+    case 'proposed':
+      return { label: 'NEEDS YOU', status: 'NEEDS YOU', note: 'the agent wants approval before acting', degraded: true }
     case 'held':
       return { label: 'NEEDS REVIEW', status: 'NEEDS REVIEW', note: "AI wasn't confident enough to fix it on its own", degraded: true }
     case 'failed':
@@ -74,6 +80,13 @@ export function summarize(events) {
       const tok = d._tokens || {}
       const m = outcomeMeta(e.detail.outcome, rec.healthy)
       const acted = d.action && !['none', 'None', ''].includes(d.action)
+      const tel = (d._evidence || {}).telemetry || {}
+      const evidence =
+        tel.total_signals
+          ? (tel.visible === false
+              ? 'blind'
+              : `${tel.usable_signals}/${tel.total_signals} signals`)
+          : '—'
       return {
         health: m.label,
         degraded: m.degraded,
@@ -81,6 +94,8 @@ export function summarize(events) {
         confidence: typeof d.confidence === 'number' ? Math.round(d.confidence * 100) + '%' : '—',
         cost: typeof d._cost_usd === 'number' ? '$' + d._cost_usd.toFixed(4) : '—',
         tokens: tok.in != null && tok.out != null ? `${tok.in}↓ ${tok.out}↑` : '—',
+        evidence,
+        evidenceBad: tel.visible === false || !!tel.degraded,
         status: m.status,
         note: m.note,
       }
@@ -88,7 +103,7 @@ export function summarize(events) {
   }
   return {
     health: '—', degraded: false, action: '—', confidence: '—', cost: '—', tokens: '—',
-    status: 'STANDBY', note: 'waiting for a check',
+    evidence: '—', evidenceBad: false, status: 'STANDBY', note: 'waiting for a check',
   }
 }
 

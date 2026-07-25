@@ -35,13 +35,17 @@ WATCH_MEM_CHUNKS = int(os.getenv("OURO_WATCH_MEM_CHUNKS", "3"))  # leaked 5MB bl
 # actual fix, so without a cooldown the loop would re-heal an already-fixed fleet.
 WATCH_COOLDOWN = int(os.getenv("OURO_WATCH_COOLDOWN_SEC", "90"))
 
+WATCH_BLIND_REALERT = int(os.getenv("OURO_WATCH_BLIND_REALERT_SEC", "300"))
+
 TIMELINE: list[dict] = []
 # Approvals the agent proposed but is waiting on a human to approve/reject.
 # Keyed by id; the UI renders these as approval cards.
 PENDING: dict[str, dict] = {}
-WATCH = {"enabled": WATCH_ENABLED, "last_check": None, "healthy": None, "cooldown": False}
+WATCH = {"enabled": WATCH_ENABLED, "last_check": None, "healthy": None, "cooldown": False,
+         "blind": False, "blind_detail": None}
 _cooldown_until = 0.0
 _pending_seq = 0
+_blind_alerted_at = 0.0
 
 
 def _now() -> str:
@@ -77,7 +81,11 @@ def _run_and_record(trigger_type: str, detail: dict | None = None) -> dict:
 
 def _looks_degraded(evidence: dict) -> bool:
     """Cheap rule over the numeric evidence — no LLM. Decides whether it's worth
-    escalating to a full (LLM) agent run."""
+    escalating to a full (LLM) agent run.
+
+    Only meaningful when the evidence is actually visible: with no telemetry
+    every number here is falsy, which would read as "all thresholds fine".
+    Callers must check `_is_blind()` first — see the watchdog."""
     lat = evidence.get("latency_p95_ms") or {}
     worst_latency = max(lat.values(), default=0)
     err = evidence.get("error_rate_pct") or 0
@@ -85,9 +93,15 @@ def _looks_degraded(evidence: dict) -> bool:
     return worst_latency > WATCH_LATENCY_MS or err > WATCH_ERROR_PCT or mem > WATCH_MEM_CHUNKS
 
 
+def _is_blind(evidence: dict) -> bool:
+    """True when we cannot see the service at all. Distinct from healthy: an
+    absence of bad news is not good news if there's no news."""
+    return not (evidence.get("telemetry") or {}).get("visible", True)
+
+
 async def _watchdog() -> None:
     """Continuously probe the fleet; escalate to the agent only on degradation."""
-    global _cooldown_until
+    global _cooldown_until, _blind_alerted_at
     while True:
         await asyncio.sleep(WATCH_INTERVAL)
         if not WATCH["enabled"]:
@@ -95,8 +109,28 @@ async def _watchdog() -> None:
             continue
         try:
             evidence = await asyncio.to_thread(gather_evidence)   # cheap: MCP only
-            degraded = _looks_degraded(evidence)
             WATCH["last_check"] = _now()
+
+            # Blind is its own state, never "healthy". Escalating to the LLM
+            # would be pointless (the agent refuses on unusable evidence), but
+            # a human must be told we've lost visibility.
+            if _is_blind(evidence):
+                tel = evidence.get("telemetry") or {}
+                WATCH["blind"] = True
+                WATCH["healthy"] = None
+                WATCH["blind_detail"] = {
+                    "spans_seen": tel.get("spans_seen", 0),
+                    "signals": tel.get("signals") or {},
+                }
+                now_m = time.monotonic()
+                if now_m - _blind_alerted_at > WATCH_BLIND_REALERT:
+                    _record("telemetry_blind", {"evidence": evidence})
+                    _blind_alerted_at = now_m
+                continue
+            WATCH["blind"] = False
+            WATCH["blind_detail"] = None
+
+            degraded = _looks_degraded(evidence)
             WATCH["healthy"] = not degraded
             in_cooldown = time.monotonic() < _cooldown_until
             WATCH["cooldown"] = in_cooldown

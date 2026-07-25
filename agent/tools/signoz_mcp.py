@@ -21,7 +21,18 @@ from ..telemetry import traced_tool
 MCP_URL = os.getenv("SIGNOZ_MCP_URL", "http://localhost:8000/mcp")
 API_KEY = os.getenv("SIGNOZ_API_KEY", "")
 
+# Blindness fault injection (OURO_BLIND_MODE=1). Points evidence queries at a
+# service that doesn't exist, so every call GENUINELY executes and GENUINELY
+# returns 200 OK with zero rows — nothing is mocked. That reproduces the failure
+# conventional monitoring can't see: normal latency, no errors, no content.
+BLIND_MODE = os.getenv("OURO_BLIND_MODE", "0") not in ("0", "", "false", "False")
+_BLIND_SERVICE = "ouroboros-blind-mode-no-such-service"
+
 _client = httpx.Client(timeout=30.0)
+
+
+def _svc(service: str) -> str:
+    return _BLIND_SERVICE if BLIND_MODE else service
 
 
 def _call(tool: str, arguments: dict) -> dict:
@@ -46,7 +57,7 @@ def list_services() -> dict:
 @traced_tool("mcp")
 def search_traces(service: str, minutes: int = 15, limit: int = 20) -> dict:
     return _call("signoz_search_traces", {
-        "service": service,
+        "service": _svc(service),
         "timeRange": f"{minutes}m",
         "limit": limit,
     })
@@ -66,7 +77,7 @@ def memory_pressure(service: str, minutes: int = 15) -> dict:
     A growing value is a memory leak — the one fault a config-revert can't fix,
     so it's what points the agent at a restart."""
     return _call("signoz_aggregate_traces", {
-        "service": service,
+        "service": _svc(service),
         "timeRange": f"{minutes}m",
         "aggregation": "max",
         "aggregateOn": "app.mem_leak_chunks",
@@ -82,7 +93,7 @@ def latency_p95(service: str, minutes: int = 15) -> dict:
     tiny child spans (db calls, internal work) and hides a slow top-level request.
     Grouped + sorted descending, a slow endpoint like `GET /orders` stands out."""
     return _call("signoz_aggregate_traces", {
-        "service": service,
+        "service": _svc(service),
         "timeRange": f"{minutes}m",
         "aggregation": "p95",
         "aggregateOn": "duration_nano",
@@ -102,27 +113,13 @@ def search_logs(query: str, minutes: int = 15, limit: int = 50) -> dict:
 
 
 @traced_tool("mcp")
-def memory_leak_chunks(service: str, minutes: int = 15) -> dict:
-    """Max value of the app.mem_leak_chunks span attribute — how much memory the
-    service has leaked (each chunk = 5MB). A growing/non-zero value is the only
-    trace-visible signal of the memory-leak fault, since host memory metrics
-    aren't exported in this demo."""
-    return _call("signoz_aggregate_traces", {
-        "service": service,
-        "timeRange": f"{minutes}m",
-        "aggregation": "max",
-        "aggregateOn": "app.mem_leak_chunks",
-    })
-
-
-@traced_tool("mcp")
 def error_rate(service: str, minutes: int = 15) -> dict:
     """Span counts PER OPERATION, total vs error, so a real per-endpoint error rate
     can be computed. An all-spans rate is diluted by the many non-error child spans
     (db calls, http-send), so a 30% request error rate would wash out to a few %.
     Grouping by operation keeps the entry span's true rate visible."""
     common = {
-        "service": service, "timeRange": f"{minutes}m", "aggregation": "count",
+        "service": _svc(service), "timeRange": f"{minutes}m", "aggregation": "count",
         "groupBy": "name", "orderBy": "count() desc", "limit": 15,
     }
     total = _call("signoz_aggregate_traces", common)

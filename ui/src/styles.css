@@ -40,36 +40,131 @@ body::before{
 .ascii-fx{position:relative;width:100%;height:100%;overflow:hidden}
 .ascii-fx-canvas{display:block;width:100%;height:100%}
 .hero-art{position:absolute;inset:0;z-index:0}
-/* fade the ASCII into the copy side + bottom so text stays legible */
+/* fade the ASCII into the copy side + bottom so text stays legible — opaque
+   well before the copy column starts, not just at its far edge */
 .hero-fade{position:absolute;inset:0;pointer-events:none;
   background:
-    linear-gradient(90deg, transparent 0%, transparent 42%, var(--bg) 88%),
+    linear-gradient(90deg, transparent 0%, transparent 26%, rgba(10,12,16,.72) 46%, var(--bg) 64%),
     linear-gradient(0deg, var(--bg) 2%, transparent 30%)}
-.hero-copy{position:relative;z-index:1;grid-column:2;justify-self:start;max-width:560px;
-  padding:0 clamp(20px,5vw,72px);animation:rise .9s cubic-bezier(.2,.7,.2,1) both}
-@media(max-width:860px){.hero-copy{grid-column:1;background:rgba(10,12,16,.55);padding:32px 24px}}
-.hero-eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;
-  color:var(--chrome);margin-bottom:18px}
-.hero-title{font-family:var(--disp);font-weight:700;font-size:clamp(44px,8vw,88px);line-height:.95;
-  letter-spacing:.04em;color:var(--text);text-transform:uppercase}
+/* CRT scanlines + a vignette, sized in px so they read as instrument texture
+   rather than scaling with the type. Plain alpha rather than mix-blend-mode:
+   blending this over a repainting canvas re-composites the whole region every
+   frame, and near-black overlays look the same either way. */
+.hero-veil{position:absolute;inset:0;z-index:1;pointer-events:none;opacity:.7;
+  background:
+    repeating-linear-gradient(0deg, rgba(0,0,0,.22) 0 1px, transparent 1px 3px),
+    radial-gradient(120% 90% at 50% 50%, transparent 55%, rgba(0,0,0,.45))}
+
+/* No backdrop-filter here on purpose — .hero-fade already renders this area
+   near-opaque, so a blur would cost a full-region re-blur per canvas frame and
+   buy almost nothing. A slightly stronger scrim does the same job for free. */
+.hero-copy{position:relative;z-index:2;grid-column:2;justify-self:start;max-width:580px;
+  padding:clamp(28px,4vh,44px) clamp(24px,4.5vw,60px);margin:0 -24px;
+  background:linear-gradient(100deg, rgba(10,12,16,.35), rgba(10,12,16,.78) 35%)}
+@media(max-width:860px){.hero-copy{grid-column:1;background:rgba(10,12,16,.72);padding:36px 24px;margin:0}}
+/* HUD corner brackets — the copy reads as something framed in a scope */
+.hero-bracket{position:absolute;width:26px;height:26px;pointer-events:none;opacity:.55}
+.hero-bracket.tl{top:0;left:0;border-top:1px solid var(--chrome);border-left:1px solid var(--chrome)}
+.hero-bracket.br{bottom:0;right:0;border-bottom:1px solid var(--chrome);border-right:1px solid var(--chrome)}
+@media(max-width:860px){.hero-bracket{display:none}}
+
+/* one orchestrated load: each block rises in sequence */
+.hero-copy>*{animation:rise .8s cubic-bezier(.2,.7,.2,1) both}
+.hero-eyebrow{animation-delay:.05s}
+.hero-title{animation-delay:.15s}
+.hero-line{animation-delay:.28s}
+.hero-tag{animation-delay:.38s}
+.hero-loop{animation-delay:.48s}
+.hero-spec{animation-delay:.58s}
+.hero-cta{animation-delay:.68s}
+.hero-bracket{animation:fadein .6s ease .9s both}
+
+.hero-eyebrow{display:flex;align-items:center;gap:9px;font-family:var(--mono);font-size:10.5px;
+  letter-spacing:.2em;text-transform:uppercase;color:var(--chrome);margin-bottom:20px;
+  text-shadow:0 1px 8px rgba(0,0,0,.6)}
+.hero-dot{width:6px;height:6px;flex:none;border-radius:50%;background:var(--chrome);
+  box-shadow:0 0 8px var(--chrome);animation:blink 2.4s infinite}
+
+/* the wordmark, doubled — a faint echo of itself behind the solid type */
+.hero-title{position:relative;font-family:var(--disp);font-weight:700;
+  font-size:clamp(44px,7.6vw,86px);line-height:.94;letter-spacing:.035em;color:var(--text);
+  text-transform:uppercase;text-shadow:0 2px 20px rgba(0,0,0,.55)}
+.hero-title::before{content:attr(data-echo);position:absolute;left:.14em;top:.1em;z-index:-1;
+  color:var(--chrome);opacity:.13;filter:blur(1px);pointer-events:none}
 .hero-title b{color:var(--chrome);font-weight:700}
-.hero-line{font-family:var(--disp);font-weight:600;font-size:clamp(17px,2.4vw,24px);color:var(--text);
-  margin-top:18px;letter-spacing:.01em}
-.hero-tag{font-family:var(--sans);font-size:15px;line-height:1.65;color:var(--muted);margin-top:16px}
+
+.hero-line{font-family:var(--disp);font-weight:600;font-size:clamp(17px,2.3vw,23px);color:var(--text);
+  margin-top:16px;letter-spacing:.01em;text-shadow:0 1px 12px rgba(0,0,0,.55)}
+.hero-tag{font-family:var(--sans);font-size:14.5px;line-height:1.7;color:#c3c8d4;margin-top:14px;
+  max-width:50ch;text-shadow:0 1px 10px rgba(0,0,0,.6)}
 .hero-tag b{color:var(--text);font-weight:600}
-.hero-facts{display:flex;flex-direction:column;gap:8px;margin-top:22px}
-.hero-facts span{font-family:var(--mono);font-size:12px;color:var(--muted);padding-left:20px;position:relative}
-.hero-facts span::before{content:"›";position:absolute;left:2px;color:var(--acid)}
-.hero-cta{margin-top:30px;font-family:var(--disp);font-weight:700;font-size:14px;letter-spacing:.1em;
+
+/* the control loop, cycling on its own — CSS-only so it costs no re-renders
+   next to the canvas. Negative delays keep all four in phase from frame one. */
+.hero-loop{display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin-top:24px}
+.hero-phase{font-family:var(--mono);font-size:10.5px;font-weight:500;letter-spacing:.16em;
+  text-transform:uppercase;padding:5px 10px;border:1px solid var(--line);border-radius:3px;
+  color:var(--faint);background:rgba(10,12,16,.5);
+  animation:phasescan 7.2s linear infinite}
+.hero-phase:nth-child(2){animation-delay:-5.4s}
+.hero-phase:nth-child(3){animation-delay:-3.6s}
+.hero-phase:nth-child(4){animation-delay:-1.8s}
+.hero-loop-back{font-family:var(--mono);font-size:13px;color:var(--chrome);opacity:.6;
+  animation:spin 7.2s linear infinite}
+
+/* the three-tier autonomy model — what makes this more than a dashboard */
+.hero-spec{list-style:none;display:flex;flex-direction:column;gap:1px;margin-top:24px;
+  border-left:1px solid var(--line-strong)}
+.hero-tier{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:7px 0 7px 14px;
+  position:relative}
+.hero-tier::before{content:"";position:absolute;left:-1px;top:50%;transform:translateY(-50%);
+  width:1px;height:0;background:currentColor;transition:height .3s}
+.hero-tier:hover::before{height:100%}
+.hero-tier b{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;text-shadow:0 1px 8px rgba(0,0,0,.6)}
+.hero-tier span{font-family:var(--sans);font-size:12.5px;color:var(--muted);
+  text-shadow:0 1px 8px rgba(0,0,0,.6)}
+.hero-tier.auto{color:var(--acid)}
+.hero-tier.ask{color:var(--amber)}
+.hero-tier.noop{color:var(--faint)}
+.hero-tier.noop b{color:var(--muted)}
+
+.hero-cta{position:relative;overflow:hidden;margin-top:30px;display:inline-flex;align-items:center;
+  gap:12px;font-family:var(--disp);font-weight:700;font-size:13.5px;letter-spacing:.11em;
   text-transform:uppercase;color:#04140a;background:var(--chrome);border:none;border-radius:4px;
-  padding:14px 26px;cursor:pointer;transition:.18s}
-.hero-cta:hover{filter:brightness(1.1);transform:translateY(-2px)}
+  padding:14px 24px;cursor:pointer;transition:.18s;
+  box-shadow:0 0 0 1px rgba(125,211,252,.4), 0 10px 30px -12px rgba(125,211,252,.55)}
+.hero-cta i{font-style:normal;transition:transform .22s cubic-bezier(.2,.7,.2,1)}
+/* a light sweep crossing the button on hover */
+.hero-cta::after{content:"";position:absolute;inset:0;transform:translateX(-100%);
+  background:linear-gradient(100deg, transparent, rgba(255,255,255,.5), transparent);
+  transition:transform .55s ease}
+.hero-cta:hover{transform:translateY(-2px);
+  box-shadow:0 0 0 1px rgba(125,211,252,.6), 0 16px 38px -12px rgba(125,211,252,.7)}
+.hero-cta:hover i{transform:translateX(5px)}
+.hero-cta:hover::after{transform:translateX(100%)}
+.hero-cta:active{transform:translateY(0)}
+
+/* Short-and-wide windows (laptops, a half-height browser): the copy is a fixed
+   stack of blocks, so compress the rhythm rather than pushing the CTA below the
+   fold. Keyed on height because that's the axis actually running out. */
+@media(min-width:861px) and (max-height:760px){
+  .hero-copy{padding-top:20px;padding-bottom:20px}
+  .hero-title{font-size:clamp(38px,5.4vw,60px)}
+  .hero-eyebrow{margin-bottom:14px}
+  .hero-line{margin-top:12px;font-size:clamp(16px,1.7vw,19px)}
+  .hero-tag{margin-top:11px;font-size:13.5px;line-height:1.62}
+  .hero-loop{margin-top:16px}
+  .hero-spec{margin-top:16px}
+  .hero-tier{padding-top:5px;padding-bottom:5px}
+  .hero-cta{margin-top:20px;padding:12px 22px}
+}
 
 /* header */
 header{display:flex;align-items:center;justify-content:space-between;gap:20px;
   padding-bottom:20px;border-bottom:1px solid var(--line);flex-wrap:wrap;
   animation:rise .7s cubic-bezier(.2,.7,.2,1) both}
-.brand{display:flex;align-items:center;gap:14px}
+.brand{display:flex;align-items:center;gap:14px;cursor:pointer}
 .mark{width:40px;height:40px;flex:none}
 .brand h1{font-family:var(--disp);font-weight:700;font-size:22px;letter-spacing:.14em;
   text-transform:uppercase;color:var(--text)}
@@ -168,7 +263,7 @@ aside{display:flex;flex-direction:column;gap:14px;width:100%;max-width:320px}
 /* stat strip */
 .stats-caption{font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:.06em;
   margin:22px 0 8px}
-.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--line);
+.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--line);
   border:1px solid var(--line);border-radius:4px;overflow:hidden;
   animation:rise .8s .16s cubic-bezier(.2,.7,.2,1) both}
 @media(max-width:760px){.stats{grid-template-columns:repeat(2,1fr)}}
@@ -231,4 +326,17 @@ footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--line);
 @keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.35);opacity:.7}}
 @keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
 @keyframes slidein{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:none}}
-@media(prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;animation-iteration-count:1!important}}
+@keyframes fadein{from{opacity:0}to{opacity:.55}}
+/* one phase lit at a time; the strip's negative delays offset each step */
+@keyframes phasescan{
+  0%,19%{color:var(--cyan);border-color:rgba(84,216,255,.55);background:rgba(84,216,255,.09);
+    box-shadow:0 0 18px -6px rgba(84,216,255,.5)}
+  25%,100%{color:var(--faint);border-color:var(--line);background:rgba(10,12,16,.5);
+    box-shadow:none}
+}
+@media(prefers-reduced-motion:reduce){
+  *{animation-duration:.01ms!important;animation-iteration-count:1!important;animation-delay:0ms!important}
+  /* with the cycle stopped, show the whole loop as a static, legible strip */
+  .hero-phase{animation:none;color:var(--muted)}
+  .hero-loop-back{animation:none}
+}

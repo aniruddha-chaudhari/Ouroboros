@@ -150,8 +150,8 @@ spec:
       enabled: true
       env:
         SIGNOZ_OTEL_COLLECTOR_TIMEOUT: 10m
-      image: signoz/signoz-otel-collector:latest
-      version: latest
+      image: signoz/signoz-otel-collector:v0.144.6
+      version: v0.144.6
     status:
       addresses:
         otlp:
@@ -306,8 +306,8 @@ spec:
         MCP_SERVER_PORT: "8000"
         SIGNOZ_URL: http://ouroboros-signoz-mcp:8080
         TRANSPORT_MODE: http
-      image: signoz/signoz-mcp-server:latest
-      version: latest
+      image: signoz/signoz-mcp-server:v0.9.0
+      version: v0.9.0
     status:
       addresses:
         http: null
@@ -349,8 +349,8 @@ spec:
         SIGNOZ_SQLSTORE_PROVIDER: postgres
         SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN: tcp://ouroboros-signoz-telemetrystore-clickhouse-0-0:9000
         SIGNOZ_TELEMETRYSTORE_PROVIDER: clickhouse
-      image: signoz/signoz:latest
-      version: latest
+      image: signoz/signoz:v0.134.0
+      version: v0.134.0
     status:
       addresses:
         apiserver:

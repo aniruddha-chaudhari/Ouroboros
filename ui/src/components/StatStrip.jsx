@@ -15,6 +15,12 @@ export default function StatStrip({ s }) {
           <div className="k">AI confidence</div>
           <div className="v">{s.confidence}</div>
         </div>
+        {/* Evidence quality sits next to the verdict on purpose: a confident
+            answer built on missing telemetry is the failure this surfaces. */}
+        <div className="stat">
+          <div className="k">Evidence</div>
+          <div className={'v sm ' + (s.evidenceBad ? 'red' : 'acid')}>{s.evidence}</div>
+        </div>
         <div className="stat">
           <div className="k">AI cost</div>
           <div className="v sm">{s.cost}</div>
