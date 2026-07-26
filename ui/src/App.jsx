@@ -103,18 +103,27 @@ export default function App() {
   }, [])
 
   const hasPending = pending.length > 0
-  const status = hasPending ? 'NEEDS YOU' : working ? 'FIXING' : summary.status
-  const note = hasPending
+  // Blindness outranks everything: if we can't see the system, no other status
+  // on this screen is trustworthy, so say that first.
+  const isBlind = !!watch && watch.enabled && !!watch.blind
+  const status = isBlind ? "CAN'T SEE" : hasPending ? 'NEEDS YOU' : working ? 'FIXING' : summary.status
+  const note = isBlind
+    ? 'no usable telemetry — not assuming healthy'
+    : hasPending
     ? 'the agent needs your approval to act'
     : working ? 'a problem was found — healing…' : summary.note
   // Green is a genuine "healthy" signal, not decoration — it only appears here.
-  const coreState = hasPending ? 'crit' : summary.degraded ? 'crit' : working ? 'busy' : summary.status === 'HEALTHY' ? 'ok' : 'idle'
+  const coreState = isBlind || hasPending || summary.degraded
+    ? 'crit'
+    : working ? 'busy' : summary.status === 'HEALTHY' ? 'ok' : 'idle'
   const connClass = connected === null ? 'conn' : connected ? 'conn live' : 'conn dead'
   const connText = connected === null ? 'Connecting…' : connected ? 'Connected' : 'Disconnected'
 
   const watchOn = !!watch && watch.enabled
   const watchNote = !watchOn
     ? 'Monitoring paused'
+    : watch.blind
+    ? "Can't see the system — telemetry returned nothing usable"
     : watch.healthy === false
     ? 'Problem detected — healing automatically…'
     : watch.cooldown
@@ -196,6 +205,15 @@ export default function App() {
         <div className="offline">
           ⚠ Can't reach the backend. Start it with{' '}
           <code>source .venv/bin/activate &amp;&amp; make trigger</code>.
+        </div>
+      )}
+
+      {isBlind && (
+        <div className="blind-banner">
+          <b>Can't see the system.</b> Telemetry returned no usable data
+          {watch.blind_detail ? ` (${watch.blind_detail.spans_seen} spans in the window)` : ''} —
+          so the agent is refusing to diagnose rather than assume everything is fine.
+          Check that SigNoz is reachable and the services are reporting.
         </div>
       )}
 

@@ -36,6 +36,7 @@ function outcomeOf(detail) {
 
 function Remediation({ detail }) {
   const dec = detail.decision || {}
+  const tel = (dec._evidence || {}).telemetry || {}
   const tok = dec._tokens || {}
   const conf = typeof dec.confidence === 'number' ? dec.confidence : null
   const o = outcomeOf(detail)

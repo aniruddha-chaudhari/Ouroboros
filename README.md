@@ -1,101 +1,135 @@
-# Ouroboros — a self-observing, self-healing SRE agent on SigNoz
+# Ouroboros
 
-> **"Agents of SigNoz" hackathon · Track 01 — AI & Agent Observability**
+A self-healing SRE agent that monitors a microservice fleet, diagnoses
+problems, fixes the safe ones automatically, and asks for approval before
+anything risky. Its only way of seeing the fleet and its only way of acting on
+it is the **SigNoz MCP server** — no separate monitoring backend, no
+hand-wired shortcuts. The agent is also fully instrumented into SigNoz itself,
+so its own reasoning, tool calls, cost, and confidence show up as traces and
+metrics right alongside the system it's watching.
 
-An AI SRE agent that **watches your systems _and itself_**. It is fully
-instrumented with OpenTelemetry GenAI semantic conventions into SigNoz, and its
-only senses and hands are the **SigNoz MCP server**: it detects an anomaly via a
-SigNoz alert, root-causes by querying traces/logs/metrics through MCP, executes a
-remediation, then verifies the fix in SigNoz. Every reasoning step and tool call
-is itself a GenAI span in SigNoz — so **you watch the watcher.**
+## What it does
 
-This fuses three of the track's example builds — *SRE Sidekick with SigNoz MCP* +
-*Self-healing infra with SigNoz metrics* + *AI agents with E2E observability* —
-into one closed loop.
+1. **Diagnose** — on an alert (or a lightweight watchdog noticing degradation),
+   the agent queries SigNoz via MCP for latency, error rate, logs, and memory
+   pressure, and turns the results into a clean evidence summary.
+2. **Decide** — one LLM call reads that evidence and picks a remediation, or
+   decides nothing is wrong.
+3. **Gate** — three-tier autonomy:
+   - confident + low-risk → heal automatically
+   - unsure, or a high-impact action (like restarting a container) → propose
+     the fix and wait for a human to approve it
+   - telemetry itself is unusable → refuse to answer at all, rather than guess
+4. **Act** — run the chosen remediation (a config rollback, or a real
+   `docker restart` on the affected service).
+5. **Verify** — re-check the fleet directly to confirm the fix actually
+   worked before closing out the incident.
 
-## The loop
-
-```
- fault injected → SigNoz alert fires → webhook triggers agent
-     → agent queries traces/logs/metrics via MCP  (DIAGNOSE)
-     → LLM picks the single best fix               (DECIDE)
-     → agent executes a remediation action tool    (ACT)
-     → agent re-queries SigNoz to confirm recovery (VERIFY)
- …and the agent's own tokens / cost / latency / tool-calls stream into SigNoz.
-```
+A React console shows the live incident timeline, the agent's cost/tokens per
+run, and an approval card for anything waiting on a human.
 
 ## Architecture
 
-- **Demo fleet ("the patient")** — FastAPI API + load worker + MongoDB, auto-instrumented via `opentelemetry-instrument`, with a `/fault` control plane for deterministic latency / error / memory-leak injection.
-- **Ouroboros agent ("the doctor")** — Python; tools are SigNoz MCP calls + remediation actions; wrapped in `invoke_agent` / `execute_tool` GenAI spans with a custom cost metric.
-- **SigNoz** — self-hosted via **Foundry** (SigNoz + MCP in one `casting.yaml`); dashboards, threshold + anomaly alerts, Query Builder v5.
-- **Trigger + timeline** — alert webhook → agent run; incident timeline API for the UI.
+- **Demo fleet** (`services/`) — a FastAPI API + load worker + MongoDB, with a
+  `/fault` endpoint for deterministically injecting latency, errors, or a
+  memory leak so there's something for the agent to detect and fix.
+- **Ouroboros agent** (`agent/`) — the diagnose/decide/act/verify loop. Tools
+  are SigNoz MCP calls and remediation actions, each wrapped in an OpenTelemetry
+  span.
+- **SigNoz** — self-hosted via [Foundry](https://signoz.io/); provides traces,
+  metrics, logs, dashboards, alerts, and the MCP server the agent talks to.
+- **Trigger service** (`scripts/trigger.py`) — receives SigNoz alert webhooks,
+  runs a background watchdog that polls the fleet cheaply, exposes the
+  incident timeline API, and serves the built UI.
 
-## Quickstart (one-command-ish repro)
+Full component diagram and the remediation/autonomy model: [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+## Setup
+
+### Prerequisites
+
+- Docker (with Compose)
+- Python 3.11+
+- Node.js (for the console UI)
+- A [Groq](https://console.groq.com/keys) API key (free tier is fine)
+
+### 1. Deploy SigNoz + MCP
 
 ```bash
-# 0. Deploy SigNoz + MCP with Foundry (installs both in one step)
 curl -fsSL https://signoz.io/foundry.sh | bash
-foundryctl gauge -f casting.yaml    # validate
-foundryctl forge -f casting.yaml    # generates pours/ + writes casting.yaml.lock
+foundryctl gauge -f casting.yaml    # validate the deployment spec
+foundryctl forge -f casting.yaml    # generate manifests + casting.yaml.lock
 foundryctl cast  -f casting.yaml    # deploy
-#   UI :8080 · OTLP :4317/:4318 · MCP :8000
-#   -> create a service-account API key: Settings → Service Accounts (Admin)
+```
 
-cp .env.example .env && $EDITOR .env   # add GROQ_API_KEY + SIGNOZ_API_KEY
+This brings up SigNoz on `:8080`, the OTel collector on `:4317`/`:4318`, and
+the MCP server on `:8000`. In the SigNoz UI, create a service-account API key
+under **Settings → Service Accounts** (Admin role).
 
-make fleet        # build + start demo fleet (API, worker, Mongo)
-make dashboards   # import dashboards/ai-agent-observability.json
-make alerts       # create threshold + anomaly alerts (Terraform) 
-make ui           # build the React console (npm install + vite build)
-make trigger      # start alert→agent bridge + timeline API + console on :8090
+### 2. Configure environment
 
-# Demo the loop:
-make demo-latency  # inject latency → alert fires → agent heals → recovery
-# or deterministically:
+```bash
+cp .env.example .env
+```
+
+Fill in:
+
+| Variable | Purpose |
+|---|---|
+| `GROQ_API_KEY` | LLM calls (Groq's OpenAI-compatible API) |
+| `SIGNOZ_API_KEY` | The service-account key from step 1 |
+| `SIGNOZ_MCP_URL` | Defaults to `http://localhost:8000/mcp` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Defaults to `http://localhost:4317` |
+| `DEMO_API_URL` | Defaults to `http://localhost:8001` |
+
+### 3. Bring up the demo fleet and agent
+
+```bash
+make fleet        # build + start the demo API, worker, and Mongo
+make dashboards   # import dashboards/ai-agent-observability.json into SigNoz
+make alerts       # create the threshold + anomaly alerts (via Terraform)
+make ui           # build the React console
+make trigger      # start the alert bridge + timeline API + console, on :8090
+```
+
+### 4. Try it
+
+```bash
+make demo-latency   # inject a latency fault; watch the agent detect + heal it
+# or trigger a cycle directly:
 curl -XPOST localhost:8090/diagnose
 ```
 
-### Console UI
-
-A React console (`ui/`, Vite) visualises the closed loop and streams the incident
-timeline (alert → agent decision → remediation → recovery) with the agent's own
-cost/tokens/confidence.
+Open `http://localhost:8090` for the console. For UI development with
+hot-reload instead of a static build:
 
 ```bash
-make ui         # build once → served at http://localhost:8090 by `make trigger`
-# …or hot-reload during development (proxies the API to :8090):
-make ui-dev     # http://localhost:5173
+make ui-dev   # http://localhost:5173, proxies the API to :8090
 ```
 
-## What this exercises in SigNoz (Best-Use-of-SigNoz mapping)
+## Repo structure
 
-| SigNoz feature | Where | Judging criterion it serves |
-|----------------|-------|------------------------------|
-| **Traces** (GenAI span tree `invoke_agent→chat→execute_tool`) | `agent/telemetry.py` | Best Use of SigNoz, Technical Excellence |
-| **Metrics** (`gen_ai.client.token.usage`, `.operation.duration`, custom `.cost`) | `agent/telemetry.py`, dashboard | Best Use of SigNoz |
-| **Logs** (trace-correlated) | `run.sh` (`OTEL_PYTHON_LOG_CORRELATION`) | Best Use of SigNoz |
-| **Dashboards** (exported JSON, reproducible) | `dashboards/` | Presentation, Best Use |
-| **Alerts** (threshold + anomaly, as code) | `alerts/` | Best Use, Technical Excellence |
-| **Query Builder v5** (formula error% = A/B×100) | `agent/tools/signoz_mcp.py`, dashboard | Technical Excellence |
-| **MCP server** (agent's toolset; also creates alerts) | `agent/tools/signoz_mcp.py` | Creativity, Best Use |
-| **Service accounts / API keys** | `.env`, MCP auth | Technical Excellence |
-| **Host / infra metrics** | collector (see note) | Best Use |
-| **Alert history / saved views** | MCP tools | Best Use |
+```
+agent/          the Ouroboros agent — telemetry, semantic conventions, MCP + action tools
+services/       the demo fleet: FastAPI api + load worker
+scripts/        fault injection, alert webhook trigger, incident timeline API
+dashboards/     SigNoz dashboard, exported as JSON
+alerts/         SigNoz alerts as Terraform
+ui/             the React incident-timeline console
+casting.yaml(.lock)   Foundry deployment spec for SigNoz + MCP
+```
 
-## Reproducibility
+## Notes
 
-- `casting.yaml` **and** `casting.yaml.lock` are committed; `.gitignore` explicitly keeps the lock and ignores only the regenerable `pours/`.
-- All three SigNoz images are pinned to exact versions in `casting.yaml` (`signoz` v0.134.0, `signoz-mcp-server` v0.9.0, `signoz-otel-collector` v0.144.6) — the same versions this project was built and demoed against, not floating `latest` tags.
-- Dashboards are committed as JSON; alerts as Terraform (or via `scripts/create_alerts_via_mcp.py`).
-- Judges can re-run `foundryctl cast -f casting.yaml` to reproduce the full stack.
+- **Host metrics** aren't deployed by Foundry by default (see SigNoz issue
+  #11829) — run a collection agent separately if you want the Infra view.
+- **Content capture** (`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true`)
+  is on for local/demo use; turn it off or redact at the Collector before
+  running this against anything real, since it captures full prompts/completions.
+- **GenAI semantic conventions are still pre-1.0** and shift between versions;
+  attribute names are isolated in `agent/semconv.py` so a spec bump is a
+  one-file change.
 
-## Notes & caveats
+## License
 
-- **Host metrics:** Foundry deploys SigNoz + MCP but not the Docker host-metrics collector (SigNoz issue #11829). Run a collection agent separately if you showcase the Infra view.
-- **MCP tool versions:** alert-rule MCP tools need SigNoz ≥ v0.120.0, which v0.134.0 (pinned above) satisfies.
-- **GenAI semconv is pre-1.0:** attribute strings are isolated in `agent/semconv.py` for easy version bumps.
-- **Content capture** (`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true`) is on for the demo only — redact at the Collector in production.
-
-See `PLAN.md` for the full compliance matrix and build plan, `AI_USAGE.md` for
-the AI-assistant declaration, and `DEMO.md` for the demo script.
+MIT — see [`LICENSE`](LICENSE).
